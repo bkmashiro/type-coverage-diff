@@ -1,3 +1,5 @@
+[![npm](https://img.shields.io/npm/v/type-coverage-diff)](https://www.npmjs.com/package/type-coverage-diff) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 # type-coverage-diff
 
 `type-coverage-diff` is a CLI that compares TypeScript `any` coverage between two git refs and fails when coverage regresses beyond a configurable threshold.

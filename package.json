@@ -2,6 +2,7 @@
   "name": "type-coverage-diff",
   "version": "0.1.0",
   "description": "CLI to compare TypeScript any coverage between two git refs",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "type-coverage-diff": "dist/index.js"

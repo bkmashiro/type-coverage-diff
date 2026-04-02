@@ -14,10 +14,14 @@ import {
   stashPopByMessage,
   stashPush,
 } from './git.js';
+import { createTrendReport, formatTrendReport, updateCoverageHistory } from './trend.js';
 
 interface CliOptions {
   base: string;
   threshold: string;
+  trend?: boolean;
+  trendDays?: string;
+  strict?: boolean;
   json?: boolean;
   fail: boolean;
   cwd: string;
@@ -31,6 +35,9 @@ async function main(): Promise<void> {
     .description('Show TypeScript any coverage changes between two git refs')
     .option('--base <ref>', 'Base branch/commit', 'main')
     .option('--threshold <pct>', 'Max allowed coverage drop %', '1.0')
+    .option('--trend', 'Show coverage history and overall trend')
+    .option('--trend-days <n>', 'Only show the last N days of trend history')
+    .option('--strict', 'Count `as any`, `@ts-ignore`, and `@ts-expect-error` as violations')
     .option('--json', 'Output JSON')
     .option('--no-fail', "Don't exit 1 on regression")
     .option('--cwd <path>', 'Project directory', process.cwd())
@@ -39,12 +46,32 @@ async function main(): Promise<void> {
   const options = program.opts<CliOptions>();
   const cwd = path.resolve(options.cwd);
   const threshold = Number(options.threshold);
+  const trendDays =
+    typeof options.trendDays === 'string' && options.trendDays.length > 0 ? Number(options.trendDays) : undefined;
 
   if (!Number.isFinite(threshold) || threshold < 0) {
     throw new Error(`Invalid threshold: ${options.threshold}`);
   }
 
+  if (trendDays !== undefined && (!Number.isInteger(trendDays) || trendDays <= 0)) {
+    throw new Error(`Invalid trend days: ${options.trendDays}`);
+  }
+
   ensureGitRepository(cwd);
+
+  if (options.trend) {
+    const summary = await runCoverage(cwd);
+    const history = updateCoverageHistory(cwd, {
+      date: new Date().toISOString().slice(0, 10),
+      percentage: summary.percent,
+      commit: resolveRef(cwd, 'HEAD'),
+    });
+    const report = createTrendReport(history, trendDays);
+
+    process.stdout.write(`${options.json ? formatJson(report) : formatTrendReport(report)}\n`);
+    return;
+  }
+
   const baseRef = resolveRef(cwd, options.base);
   const currentRef = resolveRef(cwd, 'HEAD');
   const currentCheckoutTarget = getCurrentCheckoutTarget(cwd);
@@ -52,10 +79,10 @@ async function main(): Promise<void> {
   const stashMarker = stashPush(cwd);
 
   try {
-    const after = await runCoverage(cwd);
+    const after = await runCoverage(cwd, { strict: options.strict });
     checkoutRef(cwd, baseRef);
 
-    const before = await runCoverage(cwd);
+    const before = await runCoverage(cwd, { strict: options.strict });
     const diff = diffCoverage(before, after, threshold);
 
     if (options.json) {

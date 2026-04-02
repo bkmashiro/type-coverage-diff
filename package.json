@@ -1,6 +1,6 @@
 {
   "name": "type-coverage-diff",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI to compare TypeScript any coverage between two git refs",
   "license": "MIT",
   "type": "module",

@@ -2,7 +2,8 @@
 import path from 'node:path';
 import process from 'node:process';
 import { Command } from 'commander';
-import { runCoverage } from './coverage.js';
+import { applySimpleFixes, formatAutoFixReport } from './auto-fix.js';
+import { resolveCoverageFiles, runCoverage } from './coverage.js';
 import { diffCoverage } from './diff.js';
 import { formatDiff, formatJson } from './formatter.js';
 import {
@@ -14,6 +15,7 @@ import {
   stashPopByMessage,
   stashPush,
 } from './git.js';
+import { collectHotspots, formatHotspotReport } from './hotspots.js';
 import { createTrendReport, formatTrendReport, updateCoverageHistory } from './trend.js';
 
 interface CliOptions {
@@ -23,6 +25,8 @@ interface CliOptions {
   trendDays?: string;
   strict?: boolean;
   json?: boolean;
+  hotspots?: boolean;
+  fixSimple?: boolean;
   fail: boolean;
   cwd: string;
 }
@@ -33,10 +37,13 @@ async function main(): Promise<void> {
   program
     .name('type-coverage-diff')
     .description('Show TypeScript any coverage changes between two git refs')
+    .argument('[paths...]', 'Optional file or directory filters')
     .option('--base <ref>', 'Base branch/commit', 'main')
     .option('--threshold <pct>', 'Max allowed coverage drop %', '1.0')
     .option('--trend', 'Show coverage history and overall trend')
     .option('--trend-days <n>', 'Only show the last N days of trend history')
+    .option('--hotspots', 'Show files with the highest concentration of `any` types')
+    .option('--fix-simple', 'Auto-fix obvious `any` annotations using safe inference')
     .option('--strict', 'Count `as any`, `@ts-ignore`, and `@ts-expect-error` as violations')
     .option('--json', 'Output JSON')
     .option('--no-fail', "Don't exit 1 on regression")
@@ -44,7 +51,9 @@ async function main(): Promise<void> {
     .parse(process.argv);
 
   const options = program.opts<CliOptions>();
+  const paths = program.args;
   const cwd = path.resolve(options.cwd);
+  const files = resolveCoverageFiles(cwd, paths);
   const threshold = Number(options.threshold);
   const trendDays =
     typeof options.trendDays === 'string' && options.trendDays.length > 0 ? Number(options.trendDays) : undefined;
@@ -57,10 +66,26 @@ async function main(): Promise<void> {
     throw new Error(`Invalid trend days: ${options.trendDays}`);
   }
 
+  if (options.hotspots && options.fixSimple) {
+    throw new Error('Choose either --hotspots or --fix-simple, not both');
+  }
+
+  if (options.hotspots) {
+    const report = await collectHotspots(cwd, paths);
+    process.stdout.write(`${options.json ? formatJson(report) : formatHotspotReport(report)}\n`);
+    return;
+  }
+
+  if (options.fixSimple) {
+    const report = await applySimpleFixes(cwd, paths);
+    process.stdout.write(`${options.json ? formatJson(report) : formatAutoFixReport(report)}\n`);
+    return;
+  }
+
   ensureGitRepository(cwd);
 
   if (options.trend) {
-    const summary = await runCoverage(cwd);
+    const summary = await runCoverage(cwd, { files });
     const history = updateCoverageHistory(cwd, {
       date: new Date().toISOString().slice(0, 10),
       percentage: summary.percent,
@@ -79,10 +104,10 @@ async function main(): Promise<void> {
   const stashMarker = stashPush(cwd);
 
   try {
-    const after = await runCoverage(cwd, { strict: options.strict });
+    const after = await runCoverage(cwd, { strict: options.strict, files });
     checkoutRef(cwd, baseRef);
 
-    const before = await runCoverage(cwd, { strict: options.strict });
+    const before = await runCoverage(cwd, { strict: options.strict, files });
     const diff = diffCoverage(before, after, threshold);
 
     if (options.json) {

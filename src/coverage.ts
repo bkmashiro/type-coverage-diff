@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { lint } from 'type-coverage-core';
@@ -29,6 +29,7 @@ export interface CoverageSummary extends CoverageResult {
 
 export interface RunCoverageOptions {
   strict?: boolean;
+  files?: string[];
 }
 
 const SOURCE_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
@@ -88,6 +89,40 @@ function collectSourceFiles(cwd: string, directory = cwd): string[] {
   return files;
 }
 
+export function resolveCoverageFiles(cwd: string, targets: string[] = []): string[] | undefined {
+  if (targets.length === 0) {
+    return undefined;
+  }
+
+  const files = new Set<string>();
+
+  for (const target of targets) {
+    const resolvedTarget = path.resolve(cwd, target);
+
+    if (!existsSync(resolvedTarget)) {
+      throw new Error(`Path not found: ${target}`);
+    }
+
+    const stats = statSync(resolvedTarget);
+    if (stats.isDirectory()) {
+      for (const file of collectSourceFiles(cwd, resolvedTarget)) {
+        files.add(file);
+      }
+      continue;
+    }
+
+    if (stats.isFile()) {
+      if (!SOURCE_FILE_EXTENSIONS.has(path.extname(resolvedTarget))) {
+        continue;
+      }
+
+      files.add(path.relative(cwd, resolvedTarget));
+    }
+  }
+
+  return [...files].sort();
+}
+
 function getLineAndCharacter(sourceText: string, offset: number): { line: number; character: number } {
   const prefix = sourceText.slice(0, offset);
   const lines = prefix.split('\n');
@@ -102,10 +137,11 @@ function getLineText(sourceText: string, line: number): string {
   return sourceText.split('\n')[line - 1]?.trim() ?? '';
 }
 
-function scanStrictViolations(cwd: string): CoverageViolation[] {
+function scanStrictViolations(cwd: string, files?: string[]): CoverageViolation[] {
   const violations: CoverageViolation[] = [];
+  const sourceFiles = files ?? collectSourceFiles(cwd);
 
-  for (const file of collectSourceFiles(cwd)) {
+  for (const file of sourceFiles) {
     const absolutePath = path.join(cwd, file);
     const sourceText = readFileSync(absolutePath, 'utf8');
     const scanners: Array<{ kind: Exclude<ViolationKind, 'any'>; expression: RegExp }> = [
@@ -142,9 +178,10 @@ export async function runCoverage(cwd: string, options: RunCoverageOptions = {})
       strict: false,
       enableCache: false,
       fileCounts: false,
+      files: options.files,
     });
     const baseViolations = (result.anys ?? []).map((entry) => normalizeAnyLocation(entry, cwd));
-    const strictViolations = options.strict ? scanStrictViolations(cwd) : [];
+    const strictViolations = options.strict ? scanStrictViolations(cwd, options.files) : [];
     const violations = [...baseViolations, ...strictViolations];
     const counts = createEmptyCounts();
 
